@@ -65,7 +65,7 @@ export function registerAbilityTools(server: McpServer): void {
     'Activate an ability. Check stat requirements and cooldown, then apply the effect.',
     {
       token: z.string().uuid().describe('Your auth token'),
-      ability_name: z.string().describe('Name of the ability to use (e.g. "Rage", "Stealth", "Heal", "Inspire", "Lucky Strike", "Fortify")'),
+      ability_name: z.string().describe('Name of the ability to use (see "abilities" tool for your available abilities)'),
     },
     async ({ token, ability_name }) => {
       try {

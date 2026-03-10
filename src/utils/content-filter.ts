@@ -179,3 +179,11 @@ export function validateContent(text: string, fieldName: string): void {
     );
   }
 }
+
+/**
+ * Strips all HTML tags from input text to prevent XSS attacks.
+ * Simple regex-based approach that removes everything between < and >.
+ */
+export function sanitizeHtml(text: string): string {
+  return text.replace(/<[^>]*>/g, '');
+}

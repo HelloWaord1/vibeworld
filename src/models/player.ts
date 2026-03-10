@@ -2,6 +2,7 @@ import { getDb } from '../db/connection.js';
 import type { Player } from '../types/index.js';
 import { STARTING_HP, STARTING_GOLD, STARTING_STATS } from '../types/index.js';
 import { generateToken, hashPassword, verifyPassword } from '../utils/crypto.js';
+import { checkAndUnlock } from './achievement.js';
 
 export function createPlayer(name: string, password: string): Player {
   const db = getDb();
@@ -107,6 +108,10 @@ export function addXp(id: number, amount: number): { leveled_up: boolean; new_le
   if (leveled_up) {
     db.prepare('UPDATE players SET xp = ?, level = ?, max_hp = max_hp + ?, hp = min(hp + ?, max_hp + ?) WHERE id = ?')
       .run(remainingXp, currentLevel, levelsGained * 10, levelsGained * 10, levelsGained * 10, id);
+
+    // Check level-based achievements
+    if (currentLevel >= 5) checkAndUnlock(id, 'level5');
+    if (currentLevel >= 10) checkAndUnlock(id, 'level10');
   } else {
     db.prepare('UPDATE players SET xp = ? WHERE id = ?').run(remainingXp, id);
   }
@@ -142,4 +147,7 @@ export function updatePlayerGold(id: number, gold: number): void {
   const db = getDb();
   const capped = Math.min(Math.max(0, gold), 10_000_000);
   db.prepare('UPDATE players SET gold = ? WHERE id = ?').run(capped, id);
+
+  // Check wealth achievement
+  if (capped >= 1000) checkAndUnlock(id, 'rich');
 }

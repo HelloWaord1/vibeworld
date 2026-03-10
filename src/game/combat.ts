@@ -10,6 +10,8 @@ import { addBounty, claimBounty } from './bounty.js';
 import { consumeBuff } from './abilities.js';
 import { getActiveBountiesOnPlayer } from '../models/bounty.js';
 import { getActiveSoulBinding, removeSoulBinding } from '../models/soul-binding.js';
+import { getAttackNarrative, getMissNarrative } from './combat-narrative.js';
+import { checkAndUnlock } from '../models/achievement.js';
 
 function getWeaponBonus(playerId: number): number {
   const weapon = getEquippedWeapon(playerId);
@@ -50,7 +52,15 @@ export function resolveCombatRound(attacker: Player, defender: Player, options?:
     parts.push(...buffNarrative);
     buffNarrative.length = 0;
   }
-  parts.push(`${first.name} rolls ${r1.attacker_roll} vs AC ${r1.defender_ac}: ${r1.hit ? (r1.crit ? 'CRITICAL HIT' : 'Hit') : 'Miss'}${r1.hit ? ` for ${r1.damage} damage` : ''}`);
+
+  const firstWeapon = getEquippedWeapon(first.id);
+  if (r1.hit) {
+    const attackNarrative = getAttackNarrative(first.name, second.name, r1.damage, r1.crit, firstWeapon?.name);
+    parts.push(`${attackNarrative}\n(d20: ${r1.attacker_roll} vs AC ${r1.defender_ac} = Hit, ${r1.damage} dmg)`);
+  } else {
+    const missNarrative = getMissNarrative(first.name, second.name);
+    parts.push(`${missNarrative}\n(d20: ${r1.attacker_roll} vs AC ${r1.defender_ac} = Miss)`);
+  }
 
   let secondResult: CombatResult;
   if (secondHp > 0) {
@@ -61,14 +71,40 @@ export function resolveCombatRound(attacker: Player, defender: Player, options?:
       parts.push(...buffNarrative);
       buffNarrative.length = 0;
     }
-    parts.push(`${second.name} rolls ${secondResult.attacker_roll} vs AC ${secondResult.defender_ac}: ${secondResult.hit ? (secondResult.crit ? 'CRITICAL HIT' : 'Hit') : 'Miss'}${secondResult.hit ? ` for ${secondResult.damage} damage` : ''}`);
+
+    const secondWeapon = getEquippedWeapon(second.id);
+    if (secondResult.hit) {
+      const attackNarrative = getAttackNarrative(second.name, first.name, secondResult.damage, secondResult.crit, secondWeapon?.name);
+      parts.push(`${attackNarrative}\n(d20: ${secondResult.attacker_roll} vs AC ${secondResult.defender_ac} = Hit, ${secondResult.damage} dmg)`);
+    } else {
+      const missNarrative = getMissNarrative(second.name, first.name);
+      parts.push(`${missNarrative}\n(d20: ${secondResult.attacker_roll} vs AC ${secondResult.defender_ac} = Miss)`);
+    }
   } else {
     secondResult = { attacker_roll: 0, defender_ac: 0, hit: false, damage: 0, crit: false, attacker_hp: secondHp, defender_hp: firstHp, attacker_dead: secondHp <= 0, defender_dead: false };
   }
 
+  // Check for Undying passive (must be done BEFORE HP update)
+  let atkHp = attackerFirst ? firstHp : secondHp;
+  let defHp = attackerFirst ? secondHp : firstHp;
+
+  if (atkHp <= 0) {
+    const undyingBuff = consumeBuff(attacker.id, 'undying');
+    if (undyingBuff) {
+      atkHp = 1;
+      parts.push(`[UNDYING] ${attacker.name} refuses to fall! They survive with 1 HP!`);
+    }
+  }
+
+  if (defHp <= 0) {
+    const undyingBuff = consumeBuff(defender.id, 'undying');
+    if (undyingBuff) {
+      defHp = 1;
+      parts.push(`[UNDYING] ${defender.name} refuses to fall! They survive with 1 HP!`);
+    }
+  }
+
   // Update HPs
-  const atkHp = attackerFirst ? firstHp : secondHp;
-  const defHp = attackerFirst ? secondHp : firstHp;
   updatePlayerHp(attacker.id, Math.max(0, atkHp));
   updatePlayerHp(defender.id, Math.max(0, defHp));
 
@@ -158,6 +194,9 @@ function resolveAttack(
   const stealthBuff = consumeBuff(attacker.id, 'stealth');
   const inspireBuff = consumeBuff(attacker.id, 'inspire');
   const luckyStrikeBuff = consumeBuff(attacker.id, 'lucky_strike');
+  const powerStrikeBuff = consumeBuff(attacker.id, 'power_strike');
+  const titansGripBuff = consumeBuff(attacker.id, 'titans_grip');
+  const assassinateBuff = consumeBuff(attacker.id, 'assassinate');
 
   const stealthBonus = stealthBuff ? stealthBuff.value : 0;
   const inspireBonus = inspireBuff ? inspireBuff.value : 0;
@@ -166,15 +205,23 @@ function resolveAttack(
   if (stealthBuff) buffNarrative.push(`[STEALTH] ${attacker.name} strikes from the shadows! (+5 to hit)`);
   if (inspireBuff) buffNarrative.push(`[INSPIRE] ${attacker.name} feels inspired! (+2 to hit)`);
   if (luckyStrikeBuff) buffNarrative.push(`[LUCKY STRIKE] Fortune guides ${attacker.name}'s blade!`);
+  if (powerStrikeBuff) buffNarrative.push(`[POWER STRIKE] ${attacker.name} strikes with precision, ignoring defenses!`);
+  if (titansGripBuff) buffNarrative.push(`[TITAN'S GRIP] ${attacker.name}'s attack is empowered! (+50% damage)`);
+  if (assassinateBuff) buffNarrative.push(`[ASSASSINATE] ${attacker.name} delivers a LETHAL STRIKE!`);
 
   // Consume defender's defensive buffs
   const fortifyBuff = consumeBuff(defender.id, 'fortify');
   const rageAcPenalty = consumeBuff(defender.id, 'rage_ac_penalty');
+  const paladinsShieldBuff = consumeBuff(defender.id, 'paladins_shield');
 
   let acModifier = 0;
   if (fortifyBuff) {
     acModifier += fortifyBuff.value;
     buffNarrative.push(`[FORTIFY] ${defender.name}'s defenses hold strong! (+${fortifyBuff.value} AC)`);
+  }
+  if (paladinsShieldBuff) {
+    acModifier += paladinsShieldBuff.value;
+    buffNarrative.push(`[PALADIN'S SHIELD] ${defender.name} is protected by holy light! (+${paladinsShieldBuff.value} AC)`);
   }
   if (rageAcPenalty) {
     acModifier -= rageAcPenalty.value;
@@ -182,30 +229,45 @@ function resolveAttack(
   }
 
   const attackRoll = d20() + Math.floor(attacker.strength / 2) + weaponBonus + stealthBonus + inspireBonus;
-  const ac = 10 + Math.floor(defender.constitution / 3) + armorBonus + acModifier;
+  // Power Strike ignores armor bonus
+  const effectiveArmorBonus = powerStrikeBuff ? 0 : armorBonus;
+  const ac = 10 + Math.floor(defender.constitution / 3) + effectiveArmorBonus + acModifier;
   const hit = attackRoll >= ac;
 
   let damage = 0;
   let crit = false;
 
   if (hit) {
-    damage = Math.max(1, d6() + Math.floor(attacker.strength / 3) + weaponBonus);
-
-    // Lucky Strike: auto-crit on hit
-    if (luckyStrikeBuff) {
+    // Assassinate: fixed damage, auto-crit
+    if (assassinateBuff) {
+      damage = assassinateBuff.value;
       crit = true;
-      damage *= 2;
     } else {
-      const critRoll = d20();
-      if (critRoll <= Math.min(MAX_CRIT_CHANCE, Math.floor(attacker.luck / 2))) {
-        crit = true;
+      damage = Math.max(1, d6() + Math.floor(attacker.strength / 3) + weaponBonus);
+
+      // Lucky Strike: 50% crit chance
+      if (luckyStrikeBuff) {
+        if (Math.random() < luckyStrikeBuff.value) {
+          crit = true;
+          damage *= 2;
+        }
+      } else {
+        const critRoll = d20();
+        if (critRoll <= Math.min(MAX_CRIT_CHANCE, Math.floor(attacker.luck / 2))) {
+          crit = true;
+          damage *= 2;
+        }
+      }
+
+      // Rage: double damage (stacks with crit)
+      if (rageBuff) {
         damage *= 2;
       }
-    }
 
-    // Rage: double damage (stacks with crit)
-    if (rageBuff) {
-      damage *= 2;
+      // Titan's Grip: +50% damage
+      if (titansGripBuff) {
+        damage = Math.floor(damage * 1.5);
+      }
     }
 
     // Ensure minimum 1 damage on hit
@@ -281,6 +343,9 @@ export function handleDeath(victim: Player, killer: Player): { bountyGained: num
 
     // Increment killer's total_pvp_kills
     db.prepare('UPDATE players SET total_pvp_kills = total_pvp_kills + 1 WHERE id = ?').run(killer.id);
+
+    // Check pvp_kill achievement
+    checkAndUnlock(killer.id, 'pvp_kill');
 
     logEvent('kill', killer.id, victim.id, victim.chunk_x, victim.chunk_y, victim.location_id, {
       xp_gained: xpGain,

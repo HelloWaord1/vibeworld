@@ -17,6 +17,9 @@ import { getMonstersAtLocation, getEngagedMonster } from '../models/active-monst
 import { getTemplateById } from '../models/monster-template.js';
 import { awardExploreXp } from '../game/xp-rewards.js';
 import { checkCooldown } from '../server/cooldown.js';
+import { incrementQuestProgress } from '../models/quest.js';
+import { checkAndUnlock } from '../models/achievement.js';
+import { getNpcsAtLocation } from '../models/npc.js';
 
 export function registerNavigationTools(server: McpServer): void {
   server.tool(
@@ -26,6 +29,10 @@ export function registerNavigationTools(server: McpServer): void {
     async ({ token }) => {
       try {
         const player = authenticate(token);
+
+        // Track tutorial quest progress for using look
+        incrementQuestProgress(player.id, 'use_look', 1);
+
         const chunk = getChunk(player.chunk_x, player.chunk_y);
         if (!chunk) return { content: [{ type: 'text', text: 'Error: You are in a void. This should not happen.' }] };
 
@@ -101,6 +108,12 @@ export function registerNavigationTools(server: McpServer): void {
           if (exits.length > 0) {
             parts.push(`\nDirections:\n  ${exits.join('\n  ')}`);
           }
+        }
+
+        // NPCs
+        const npcs = getNpcsAtLocation(player.chunk_x, player.chunk_y, player.location_id);
+        if (npcs.length > 0) {
+          parts.push(`\nNPCs:\n  ${npcs.map(n => `${n.name} (${n.role})`).join(', ')}`);
         }
 
         // Other players
@@ -218,14 +231,32 @@ export function registerNavigationTools(server: McpServer): void {
           if (currentChunk.exit_policy === 'fee' && currentChunk.exit_fee > 0) {
             const freshPlayer = getPlayerById(player.id)!;
             if (freshPlayer.gold < currentChunk.exit_fee) {
-              return { content: [{ type: 'text', text: `Exit fee: ${currentChunk.exit_fee}g. You only have ${freshPlayer.gold}g.` }] };
+              // Check if player has been trapped for more than 5 minutes
+              const db = getDb();
+              const chunkEntry = db.prepare(
+                "SELECT created_at FROM event_log WHERE event_type = 'chunk_explore' AND actor_id = ? AND chunk_x = ? AND chunk_y = ? ORDER BY created_at DESC LIMIT 1"
+              ).get(player.id, player.chunk_x, player.chunk_y) as { created_at: string } | undefined;
+
+              const minutesInChunk = chunkEntry
+                ? (Date.now() - new Date(chunkEntry.created_at + 'Z').getTime()) / 60000
+                : 0;
+
+              if (minutesInChunk > 5 && freshPlayer.gold >= 1) {
+                // Emergency escape: penalize 10% of gold (min 1g)
+                const penalty = Math.max(1, Math.floor(freshPlayer.gold * 0.1));
+                db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(penalty, player.id);
+                exitNotice += `Emergency escape! You lost ${penalty}g scrambling out.\n`;
+              } else {
+                return { content: [{ type: 'text', text: `Exit fee: ${currentChunk.exit_fee}g. You only have ${freshPlayer.gold}g.${minutesInChunk <= 5 ? ` Wait ${Math.ceil(5 - minutesInChunk)} more minutes for emergency escape.` : ''}` }] };
+              }
+            } else {
+              const db = getDb();
+              db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(currentChunk.exit_fee, player.id);
+              if (currentChunk.ruler_id) {
+                db.prepare('UPDATE players SET gold = min(gold + ?, 10000000) WHERE id = ?').run(currentChunk.exit_fee, currentChunk.ruler_id);
+              }
+              addChunkRevenue(player.chunk_x, player.chunk_y, currentChunk.exit_fee);
             }
-            const db = getDb();
-            db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(currentChunk.exit_fee, player.id);
-            if (currentChunk.ruler_id) {
-              db.prepare('UPDATE players SET gold = min(gold + ?, 10000000) WHERE id = ?').run(currentChunk.exit_fee, currentChunk.ruler_id);
-            }
-            addChunkRevenue(player.chunk_x, player.chunk_y, currentChunk.exit_fee);
           }
         }
 
@@ -294,6 +325,17 @@ export function registerNavigationTools(server: McpServer): void {
           });
           const xpResult = awardExploreXpIfNew();
           if (xpResult) {
+            // Update explore quest progress (only for new chunks)
+            incrementQuestProgress(player.id, 'explore_chunks', 1);
+
+            // Check explorer achievement (5 unique chunks)
+            const exploredCount = db.prepare(
+              "SELECT COUNT(*) as count FROM event_log WHERE event_type = 'chunk_explore' AND actor_id = ?"
+            ).get(player.id) as { count: number };
+            if (exploredCount.count >= 5) {
+              checkAndUnlock(player.id, 'explorer');
+            }
+
             moveText += `\n+${xpResult.xp} XP (new territory!)`;
             if (xpResult.leveled_up) {
               moveText += ` LEVEL UP! You are now level ${xpResult.new_level}.`;
@@ -385,6 +427,11 @@ export function registerNavigationTools(server: McpServer): void {
         }
 
         updatePlayerPosition(player.id, player.chunk_x, player.chunk_y, loc.id);
+
+        // Track tutorial quest progress for entering a tavern
+        if (loc.location_type === 'tavern') {
+          incrementQuestProgress(player.id, 'enter_tavern', 1);
+        }
 
         let enterText = `You enter ${loc.name}.\n\n${loc.description}`;
 

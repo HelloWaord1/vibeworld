@@ -1,8 +1,16 @@
-import { createQuest, getPlayerQuests } from '../models/quest.js';
+import { createQuest, getPlayerQuests, hasTutorialQuests } from '../models/quest.js';
 import type { QuestType, DailyQuest } from '../types/index.js';
 import { DAILY_QUEST_COUNT } from '../types/index.js';
 
 interface QuestTemplate {
+  type: QuestType;
+  description: string;
+  targetCount: number;
+  rewardXp: number;
+  rewardGold: number;
+}
+
+interface TutorialQuestTemplate {
   type: QuestType;
   description: string;
   targetCount: number;
@@ -45,9 +53,37 @@ export function generateDailyQuests(playerId: number): DailyQuest[] {
   
   const quests: DailyQuest[] = [];
   for (const tmpl of selected) {
-    const quest = createQuest(playerId, tmpl.type, tmpl.description, tmpl.targetCount, tmpl.rewardXp, tmpl.rewardGold, today);
+    const quest = createQuest(playerId, tmpl.type, tmpl.description, tmpl.targetCount, tmpl.rewardXp, tmpl.rewardGold, today, false);
     quests.push(quest);
   }
-  
+
+  return quests;
+}
+
+const TUTORIAL_QUESTS: TutorialQuestTemplate[] = [
+  { type: 'use_look', description: 'First Steps: Use `look` to see your surroundings', targetCount: 1, rewardXp: 0, rewardGold: 25 },
+  { type: 'buy_item', description: 'Gear Up: Buy a weapon from the shop', targetCount: 1, rewardXp: 0, rewardGold: 25 },
+  { type: 'equip_item', description: 'Armed and Dangerous: Equip your weapon', targetCount: 1, rewardXp: 0, rewardGold: 25 },
+  { type: 'kill_monsters', description: 'Monster Hunter: Kill your first monster', targetCount: 1, rewardXp: 25, rewardGold: 50 },
+  { type: 'rest', description: 'Rest & Recover: Use rest to heal', targetCount: 1, rewardXp: 25, rewardGold: 50 },
+  { type: 'explore_chunks', description: 'Explorer: Visit a new chunk', targetCount: 1, rewardXp: 25, rewardGold: 50 },
+  { type: 'check_daily_quests', description: 'Daily Grind: Check your daily quests', targetCount: 1, rewardXp: 50, rewardGold: 75 },
+  { type: 'enter_tavern', description: 'Soul Insurance: Visit a tavern and check soul_bind', targetCount: 1, rewardXp: 50, rewardGold: 75 },
+];
+
+export function generateTutorialQuests(playerId: number): DailyQuest[] {
+  // Check if player already has tutorial quests
+  if (hasTutorialQuests(playerId)) {
+    return [];
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  const quests: DailyQuest[] = [];
+
+  for (const tmpl of TUTORIAL_QUESTS) {
+    const quest = createQuest(playerId, tmpl.type, tmpl.description, tmpl.targetCount, tmpl.rewardXp, tmpl.rewardGold, today, true);
+    quests.push(quest);
+  }
+
   return quests;
 }

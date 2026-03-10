@@ -75,4 +75,7 @@ export const COOLDOWNS = {
   SOUL_STATUS: 5_000,     // 5s between soul status checks
   QUEST_VIEW: 5_000,      // 5s between quest views
   QUEST_CLAIM: 3_000,     // 3s between quest claims
+  CHALLENGE: 30_000,      // 30s between duel challenges
+  TALK: 3_000,            // 3s between NPC conversations
+  EMOTE: 5_000,           // 5s between emotes
 } as const;

@@ -10,6 +10,7 @@ import { getStatPointsAvailable, xpToNextLevel } from '../game/leveling.js';
 import { getPendingTradesForPlayer } from '../models/trade.js';
 import { getBounty, getTopBounties } from '../game/bounty.js';
 import type { Chunk } from '../types/index.js';
+import { getPlayerAchievements, ACHIEVEMENTS } from '../models/achievement.js';
 
 // ---------------------------------------------------------------------------
 // Help data
@@ -19,12 +20,13 @@ const TOOL_CATEGORIES: Record<string, readonly string[]> = {
   'Getting Started': ['register', 'login', 'look', 'status', 'stats', 'help'],
   'Movement & Exploration': ['move', 'enter', 'exit', 'map'],
   'Combat': ['attack_player', 'attack_monster', 'flee_monster', 'seek', 'hunt', 'rest'],
+  'Dueling': ['challenge', 'accept_duel', 'decline_duel'],
   'Inventory & Equipment': [
     'inventory', 'buy_item', 'sell_item', 'use_item', 'equip', 'unequip',
     'pickup', 'drop', 'inspect',
   ],
   'Player Market': ['list_item', 'delist_item', 'my_listings'],
-  'Social & Trading': ['say', 'whisper', 'check_messages', 'who', 'trade_offer', 'accept_trade', 'reject_trade'],
+  'Social & Trading': ['say', 'whisper', 'check_messages', 'who', 'talk', 'emote', 'trade_offer', 'accept_trade', 'reject_trade'],
   'Economy': ['swap_gold_for_usdc', 'swap_usdc_for_gold'],
   'Governance': [
     'claim_chunk', 'seize_chunk', 'abdicate', 'set_chunk_tax', 'set_immigration_policy',
@@ -55,6 +57,11 @@ const TOOL_DETAILS: Record<string, string> = {
   hunt: 'hunt -- List all active monsters at your location with difficulty ratings. 5s cooldown.',
   rest: 'rest -- Recover 35% max HP (15s cooldown). Full heal in taverns for 10g.',
 
+  // Dueling
+  challenge: 'challenge {target_name, wager?} -- Challenge another player to a non-lethal duel. Both must be in same chunk. 30s cooldown.',
+  accept_duel: 'accept_duel -- Accept a pending duel challenge. Loser drops to 1 HP (no permadeath). Winner gets wager.',
+  decline_duel: 'decline_duel -- Decline a pending duel challenge.',
+
   // Inventory
   inventory: 'inventory -- View all items you own.',
   buy_item: 'buy_item {item_id} -- Buy an item from a shop (use "look" to see shop items and their IDs).',
@@ -74,6 +81,8 @@ const TOOL_DETAILS: Record<string, string> = {
   whisper: 'whisper {target_name, message} -- Send a private message to a player.',
   check_messages: 'check_messages -- View recent messages at your location and whispers.',
   who: 'who -- See who else is at your location.',
+  talk: 'talk {npc_name?, topic?} -- Talk to an NPC. Leave npc_name empty to list NPCs, leave topic empty for greeting.',
+  emote: 'emote {action} -- Perform an emote (bow, wave, dance, etc. or custom text). 5s cooldown.',
   trade_offer: 'trade_offer {target_name, offer_items, offer_gold, request_items, request_gold} -- Propose a trade.',
   accept_trade: 'accept_trade {trade_id} -- Accept a pending trade offer.',
   reject_trade: 'reject_trade {trade_id} -- Reject a pending trade offer.',
@@ -125,6 +134,16 @@ function buildCategoryListing(): string {
   lines.push('  Use "seek" or "hunt" not "gather"');
   lines.push('  Use "check_messages" not "inbox"');
   lines.push('  Use "stats" not "allocate_stat" (then use allocate_stats to spend points)');
+  lines.push('');
+  lines.push('COMMON EXAMPLES:');
+  lines.push('  allocate_stats strength=2 dexterity=1');
+  lines.push('  attack_monster monster_id=203');
+  lines.push('  move direction=north');
+  lines.push('  buy_item item_id=15');
+  lines.push('  send_mail to=PlayerName subject=Hello body=How are you?');
+  lines.push('  craft recipe_name=Iron Sword');
+  lines.push('  daily_quests (no params needed)');
+  lines.push('  soul_bind (must be in a tavern)');
   lines.push('');
   lines.push('For detailed help on a category or tool: help("combat") or help("attack_monster")');
   return lines.join('\n');
@@ -410,6 +429,61 @@ export function registerInfoTools(server: McpServer): void {
           lines.push('Nearby chunks:');
           for (const c of nearby) {
             lines.push(`  (${c.x},${c.y}) ${c.name} — ${c.terrain_type}, danger ${c.danger_level}`);
+          }
+        }
+
+        return { content: [{ type: 'text', text: lines.join('\n') }] };
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        return { content: [{ type: 'text', text: message }] };
+      }
+    }
+  );
+
+  // --- achievements ---
+  server.tool(
+    'achievements',
+    'View your unlocked achievements and progress.',
+    {
+      token: z.string().uuid().describe('Your auth token'),
+    },
+    async ({ token }) => {
+      try {
+        const player = authenticate(token);
+        const achievements = getPlayerAchievements(player.id);
+
+        const lines = ['=== ACHIEVEMENTS ===', ''];
+
+        if (achievements.length === 0) {
+          lines.push('You have not unlocked any achievements yet.');
+          lines.push('');
+          lines.push('Available achievements:');
+          for (const [key, def] of Object.entries(ACHIEVEMENTS)) {
+            lines.push(`  ${def.name} - ${def.description} (+${def.xp} XP)`);
+          }
+        } else {
+          lines.push(`Unlocked: ${achievements.length}/${Object.keys(ACHIEVEMENTS).length}`);
+          lines.push('');
+
+          // Show unlocked achievements
+          for (const ach of achievements) {
+            const def = ACHIEVEMENTS[ach.achievement_key];
+            if (def) {
+              const date = new Date(ach.unlocked_at).toLocaleDateString();
+              lines.push(`✓ ${def.name} - ${def.description} (unlocked ${date})`);
+            }
+          }
+
+          // Show locked achievements
+          const unlockedKeys = new Set(achievements.map(a => a.achievement_key));
+          const locked = Object.entries(ACHIEVEMENTS).filter(([key]) => !unlockedKeys.has(key));
+
+          if (locked.length > 0) {
+            lines.push('');
+            lines.push('Locked:');
+            for (const [key, def] of locked) {
+              lines.push(`  ✗ ${def.name} - ${def.description} (+${def.xp} XP)`);
+            }
           }
         }
 

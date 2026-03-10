@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { getDb, resetDb } from '../src/db/connection.js';
 import { migrate } from '../src/db/migrate.js';
 import { createPlayer } from '../src/models/player.js';
-import { generateDailyQuests } from '../src/game/quests.js';
-import { getPlayerQuests, getQuestStreak, updateStreak, completeQuest } from '../src/models/quest.js';
+import { generateDailyQuests, generateTutorialQuests } from '../src/game/quests.js';
+import { getPlayerQuests, getQuestStreak, updateStreak, completeQuest, getTutorialQuests } from '../src/models/quest.js';
 
 describe('Daily Quest System', () => {
   beforeEach(() => {
@@ -104,9 +104,94 @@ describe('Daily Quest System', () => {
   it('quest has rewards configured', () => {
     const player = createPlayer('QuestPlayer8', 'password123');
     const quests = generateDailyQuests(player.id);
-    
+
     expect(quests[0].reward_xp).toBeGreaterThan(0);
     // Gold rewards can be 0 for some quests (like earn_gold type)
     expect(quests[0].reward_xp + quests[0].reward_gold).toBeGreaterThan(0);
+  });
+});
+
+describe('Tutorial Quest System', () => {
+  beforeEach(() => {
+    resetDb();
+    process.env.DATABASE_PATH = ':memory:';
+    migrate();
+  });
+
+  afterEach(() => {
+    resetDb();
+  });
+
+  it('generates 8 tutorial quests for a new player', () => {
+    const player = createPlayer('TutorialPlayer1', 'password123');
+    const tutorialQuests = generateTutorialQuests(player.id);
+
+    expect(tutorialQuests).toHaveLength(8);
+    expect(tutorialQuests[0].player_id).toBe(player.id);
+    expect(tutorialQuests[0].is_tutorial).toBe(1);
+  });
+
+  it('tutorial quests are not regenerated if they already exist', () => {
+    const player = createPlayer('TutorialPlayer2', 'password123');
+
+    const quests1 = generateTutorialQuests(player.id);
+    const quests2 = generateTutorialQuests(player.id);
+
+    expect(quests1).toHaveLength(8);
+    expect(quests2).toHaveLength(0); // No new quests generated
+  });
+
+  it('tutorial quests have correct types', () => {
+    const player = createPlayer('TutorialPlayer3', 'password123');
+    const tutorialQuests = generateTutorialQuests(player.id);
+
+    const expectedTypes = [
+      'use_look',
+      'buy_item',
+      'equip_item',
+      'kill_monsters',
+      'rest',
+      'explore_chunks',
+      'check_daily_quests',
+      'enter_tavern'
+    ];
+
+    const actualTypes = tutorialQuests.map(q => q.quest_type);
+    expect(actualTypes).toEqual(expectedTypes);
+  });
+
+  it('tutorial quests have appropriate rewards', () => {
+    const player = createPlayer('TutorialPlayer4', 'password123');
+    const tutorialQuests = generateTutorialQuests(player.id);
+
+    // First 3 quests: 25g each, no XP
+    expect(tutorialQuests[0].reward_gold).toBe(25);
+    expect(tutorialQuests[0].reward_xp).toBe(0);
+
+    // Quest 4-6: 50g + 25XP each
+    expect(tutorialQuests[3].reward_gold).toBe(50);
+    expect(tutorialQuests[3].reward_xp).toBe(25);
+
+    // Quest 7-8: 75g + 50XP each
+    expect(tutorialQuests[6].reward_gold).toBe(75);
+    expect(tutorialQuests[6].reward_xp).toBe(50);
+  });
+
+  it('tutorial quests can be retrieved separately from daily quests', () => {
+    const player = createPlayer('TutorialPlayer5', 'password123');
+
+    generateTutorialQuests(player.id);
+    generateDailyQuests(player.id);
+
+    const tutorialQuests = getTutorialQuests(player.id);
+    const today = new Date().toISOString().split('T')[0];
+    const dailyQuests = getPlayerQuests(player.id, today);
+
+    expect(tutorialQuests).toHaveLength(8);
+    expect(dailyQuests).toHaveLength(3);
+
+    // Verify they are separate
+    expect(tutorialQuests.every(q => q.is_tutorial === 1)).toBe(true);
+    expect(dailyQuests.every(q => q.is_tutorial === 0)).toBe(true);
   });
 });

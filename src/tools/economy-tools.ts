@@ -8,6 +8,8 @@ import { logEvent } from '../models/event-log.js';
 import { getDb } from '../db/connection.js';
 import { applyTax } from '../game/tax.js';
 import { enforceCooldown, COOLDOWNS } from '../server/cooldown.js';
+import { incrementQuestProgress } from '../models/quest.js';
+import { checkAndUnlock } from '../models/achievement.js';
 
 export function registerEconomyTools(server: McpServer): void {
   server.tool(
@@ -147,6 +149,14 @@ export function registerEconomyTools(server: McpServer): void {
           logEvent('trade_complete', player.id, freshSender.id, player.chunk_x, player.chunk_y, player.location_id, { trade_id });
         });
         executeTrade();
+
+        // Update trade quest progress for both parties
+        incrementQuestProgress(player.id, 'trade', 1);
+        incrementQuestProgress(trade.from_id, 'trade', 1);
+
+        // Check trader achievement for both parties
+        checkAndUnlock(player.id, 'trader');
+        checkAndUnlock(trade.from_id, 'trader');
 
         return { content: [{ type: 'text', text: `✅ Trade #${trade_id} completed with ${senderName}! (2.8% platform tax + chunk tax applied on gold)` }] };
       } catch (e: any) {

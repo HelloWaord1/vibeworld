@@ -9,6 +9,8 @@ import { getDb } from '../db/connection.js';
 import { MAX_INVENTORY_SIZE, PLATFORM_TAX_RATE, STAT_CAP, SELL_ITEM_VALUE_FRACTION } from '../types/index.js';
 import { calculateTax, applyTax } from '../game/tax.js';
 import { addLocationRevenue, addChunkRevenue } from '../models/nation.js';
+import { incrementQuestProgress } from '../models/quest.js';
+import { consumeBuff } from '../game/abilities.js';
 
 export function registerInventoryTools(server: McpServer): void {
   server.tool(
@@ -117,7 +119,13 @@ export function registerInventoryTools(server: McpServer): void {
         
         // Apply CHA discount: -1% per 3 CHA, cap 25%
         const chaDiscount = Math.min(0.25, player.charisma / 300);
-        const finalCost = Math.max(1, Math.floor(item.value * (1 - chaDiscount)));
+
+        // Check for Bargain buff (50% off)
+        const bargainBuff = consumeBuff(player.id, 'bargain');
+        const bargainDiscount = bargainBuff ? bargainBuff.value : 0;
+
+        const totalDiscount = Math.min(0.75, chaDiscount + bargainDiscount); // Cap at 75% discount
+        const finalCost = Math.max(1, Math.floor(item.value * (1 - totalDiscount)));
         
         const taxInfo = calculateTax(finalCost, player.chunk_x, player.chunk_y);
 
@@ -157,12 +165,21 @@ export function registerInventoryTools(server: McpServer): void {
         logEvent('buy', player.id, null, player.chunk_x, player.chunk_y, player.location_id, {
           item_name: item.name, cost: finalCost, original_cost: item.value,
           cha_discount: chaDiscount,
+          bargain_discount: bargainDiscount,
           platform_tax: taxInfo.platformTax, chunk_tax: taxInfo.chunkTax,
         });
 
+        // Track tutorial quest progress for buying an item
+        incrementQuestProgress(player.id, 'buy_item', 1);
+
         const remainingGold = freshPlayer.gold - finalCost;
         const discountAmount = item.value - finalCost;
-        const discountNote = discountAmount > 0 ? ` (CHA discount: ${discountAmount}g off ${item.value}g)` : '';
+        let discountNote = '';
+        if (bargainBuff) {
+          discountNote = ` (BARGAIN: 50% off + CHA: ${discountAmount}g total discount from ${item.value}g)`;
+        } else if (discountAmount > 0) {
+          discountNote = ` (CHA discount: ${discountAmount}g off ${item.value}g)`;
+        }
         const taxNote = taxInfo.platformTax > 0 || taxInfo.chunkTax > 0
           ? ` (tax: ${taxInfo.platformTax}g platform + ${taxInfo.chunkTax}g chunk)`
           : '';
@@ -214,6 +231,9 @@ export function registerInventoryTools(server: McpServer): void {
           cha_bonus: chaBonus,
           platform_tax: taxInfo.platformTax, chunk_tax: taxInfo.chunkTax,
         });
+
+        // Update earn_gold quest progress
+        incrementQuestProgress(player.id, 'earn_gold', taxInfo.netAmount);
 
         const baseSellPrice = Math.floor(item.value * SELL_ITEM_VALUE_FRACTION);
         const bonusAmount = sellPrice - baseSellPrice;
@@ -283,6 +303,9 @@ export function registerInventoryTools(server: McpServer): void {
 
         equipItem(item_id);
         applyStatBonuses(player.id, item, true);
+
+        // Track tutorial quest progress for equipping an item
+        incrementQuestProgress(player.id, 'equip_item', 1);
 
         const stats: string[] = [];
         if (item.damage_bonus) stats.push(`+${item.damage_bonus} damage`);

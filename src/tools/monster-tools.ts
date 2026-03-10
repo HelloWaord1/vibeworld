@@ -4,6 +4,7 @@ import { authenticate } from '../server/auth.js';
 import { createMonsterTemplate, getTemplatesByCreator } from '../models/monster-template.js';
 import { getChunk } from '../models/chunk.js';
 import { logEvent } from '../models/event-log.js';
+import { sanitizeHtml } from '../utils/content-filter.js';
 
 export function registerMonsterTools(server: McpServer): void {
   server.tool(
@@ -34,6 +35,9 @@ export function registerMonsterTools(server: McpServer): void {
         const chunk = getChunk(player.chunk_x, player.chunk_y);
         if (!chunk) return { content: [{ type: 'text', text: 'You are in a void. Cannot create monsters here.' }] };
 
+        const sanitizedName = sanitizeHtml(name);
+        const sanitizedDescription = sanitizeHtml(description);
+
         if (min_danger_level > max_danger_level) {
           return { content: [{ type: 'text', text: 'min_danger_level cannot be greater than max_danger_level.' }] };
         }
@@ -63,8 +67,8 @@ export function registerMonsterTools(server: McpServer): void {
         const clampedXpReward = Math.min(xp_reward, maxXpReward);
 
         const template = createMonsterTemplate({
-          name,
-          description,
+          name: sanitizedName,
+          description: sanitizedDescription,
           monster_type,
           base_hp,
           base_strength,

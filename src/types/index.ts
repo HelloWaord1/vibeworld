@@ -614,7 +614,7 @@ export const SOUL_BIND_DURATION_HOURS = 48;
 export const SOUL_BIND_LEVEL_PENALTY = 3; // lose 3 levels on death
 
 // --- Daily Quests ---
-export type QuestType = 'kill_monsters' | 'explore_chunks' | 'craft_item' | 'trade' | 'earn_gold' | 'rest';
+export type QuestType = 'kill_monsters' | 'explore_chunks' | 'craft_item' | 'trade' | 'earn_gold' | 'rest' | 'use_look' | 'buy_item' | 'equip_item' | 'enter_tavern' | 'check_daily_quests';
 
 export interface DailyQuest {
   id: number;
@@ -627,6 +627,7 @@ export interface DailyQuest {
   reward_gold: number;
   assigned_date: string; // YYYY-MM-DD
   completed_at: string | null;
+  is_tutorial: number;
 }
 
 export interface QuestStreak {
@@ -638,3 +639,20 @@ export interface QuestStreak {
 
 export const DAILY_QUEST_COUNT = 3;
 export const QUEST_STREAK_BONUS_DAYS = 7; // Bonus after 7-day streak
+
+// --- NPCs ---
+export interface Npc {
+  id: number;
+  name: string;
+  role: string;
+  location_id: number;
+  chunk_x: number;
+  chunk_y: number;
+  greeting: string;
+  dialogue: string; // JSON array of dialogue options
+}
+
+export interface NpcDialogue {
+  topic: string;
+  text: string;
+}

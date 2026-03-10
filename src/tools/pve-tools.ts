@@ -13,6 +13,7 @@ import { d20 } from '../game/dice.js';
 import { HP_REGEN_FRACTION, MONSTER_REGEN_FRACTION, TAVERN_HEAL_COST, MONSTER_ENGAGE_TIMEOUT_SECONDS } from '../types/index.js';
 import { spawnRandomEncounter } from '../game/encounter.js';
 import { getPartyByPlayerId, getActivePartyMembersInChunk, isInSameParty } from '../models/party.js';
+import { incrementQuestProgress } from '../models/quest.js';
 
 function monsterDifficultyTag(monsterAc: number, monsterDmgEst: number, playerLevel: number): string {
   const score = monsterAc + monsterDmgEst - playerLevel * 2;
@@ -100,6 +101,9 @@ export function registerPveTools(server: McpServer): void {
           const chunk = getChunk(player.chunk_x, player.chunk_y);
           const dangerLevel = chunk?.danger_level ?? 1;
           const rewards = handleMonsterKill(player, monster, dangerLevel, playerParty?.id ?? null);
+
+          // Update kill quest progress
+          incrementQuestProgress(player.id, 'kill_monsters', 1);
 
           parts.push('');
           parts.push(`${monsterName} has been SLAIN!`);
@@ -289,6 +293,9 @@ export function registerPveTools(server: McpServer): void {
         const healAmount = Math.floor(fresh.max_hp * HP_REGEN_FRACTION);
         const newHp = Math.min(fresh.hp + healAmount, fresh.max_hp);
         updatePlayerHp(player.id, newHp);
+
+        // Update rest quest progress
+        incrementQuestProgress(player.id, 'rest', 1);
 
         return { content: [{ type: 'text', text: `You rest and recover ${newHp - fresh.hp} HP. (${newHp}/${fresh.max_hp} HP)` }] };
       } catch (e: any) {

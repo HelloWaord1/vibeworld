@@ -5,10 +5,11 @@ import { createMessage, getRecentMessages } from '../models/message.js';
 import { getPlayerByName, getPlayersAtChunk } from '../models/player.js';
 import { getPlayerById } from '../models/player.js';
 import { getDb } from '../db/connection.js';
-import type { Player } from '../types/index.js';
+import type { Player, NpcDialogue } from '../types/index.js';
 import { enforceCooldown, COOLDOWNS } from '../server/cooldown.js';
-import { validateContent } from '../utils/content-filter.js';
+import { validateContent, sanitizeHtml } from '../utils/content-filter.js';
 import { checkMuted } from './admin-tools.js';
+import { getNpcsAtLocation, getNpcByName } from '../models/npc.js';
 
 /** Check if blockerId has blocked blockedId. */
 function isBlocked(blockerId: number, blockedId: number): boolean {
@@ -36,11 +37,12 @@ export function registerSocialTools(server: McpServer): void {
       try {
         const player = authenticate(token);
         checkMuted(player.id);
-        validateContent(msg, 'message');
+        const sanitized = sanitizeHtml(msg);
+        validateContent(sanitized, 'message');
         const cd = enforceCooldown(player.id, 'say', COOLDOWNS.SAY);
         if (cd !== null) return { content: [{ type: 'text', text: `Please wait ${cd}s before sending another message.` }] };
-        createMessage(player.id, null, player.chunk_x, player.chunk_y, msg);
-        return { content: [{ type: 'text', text: `${player.name} says: "${msg}"` }] };
+        createMessage(player.id, null, player.chunk_x, player.chunk_y, sanitized);
+        return { content: [{ type: 'text', text: `${player.name} says: "${sanitized}"` }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }] };
       }
@@ -59,7 +61,8 @@ export function registerSocialTools(server: McpServer): void {
       try {
         const player = authenticate(token);
         checkMuted(player.id);
-        validateContent(msg, 'message');
+        const sanitized = sanitizeHtml(msg);
+        validateContent(sanitized, 'message');
         const cd = enforceCooldown(player.id, 'say', COOLDOWNS.SAY);
         if (cd !== null) return { content: [{ type: 'text', text: `Please wait ${cd}s before sending another message.` }] };
         const target = getPlayerByName(to);
@@ -71,10 +74,10 @@ export function registerSocialTools(server: McpServer): void {
         }
 
         const crossChunk = target.chunk_x !== player.chunk_x || target.chunk_y !== player.chunk_y;
-        createMessage(player.id, target.id, player.chunk_x, player.chunk_y, msg, 'whisper');
+        createMessage(player.id, target.id, player.chunk_x, player.chunk_y, sanitized, 'whisper');
 
         const suffix = crossChunk ? ' (sent across the world)' : '';
-        return { content: [{ type: 'text', text: `You whisper to ${target.name}: "${msg}"${suffix}` }] };
+        return { content: [{ type: 'text', text: `You whisper to ${target.name}: "${sanitized}"${suffix}` }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }] };
       }
@@ -148,6 +151,106 @@ export function registerSocialTools(server: McpServer): void {
         }
 
         return { content: [{ type: 'text', text: parts.join('\n') }] };
+      } catch (e: any) {
+        return { content: [{ type: 'text', text: e.message }] };
+      }
+    }
+  );
+
+  // ---------- NPC Dialogue ----------
+
+  server.tool(
+    'talk',
+    'Talk to an NPC at your location. Optionally specify a topic.',
+    {
+      token: z.string().uuid().describe('Your auth token'),
+      npc_name: z.string().optional().describe('Name of the NPC (leave empty to list NPCs)'),
+      topic: z.string().optional().describe('Topic to ask about (leave empty for greeting)'),
+    },
+    async ({ token, npc_name, topic }) => {
+      try {
+        const player = authenticate(token);
+        const cd = enforceCooldown(player.id, 'talk', 3000);
+        if (cd !== null) return { content: [{ type: 'text', text: `Please wait ${cd}s before talking again.` }] };
+
+        const npcs = getNpcsAtLocation(player.chunk_x, player.chunk_y, player.location_id);
+
+        if (!npc_name) {
+          if (npcs.length === 0) {
+            return { content: [{ type: 'text', text: 'There are no NPCs here to talk to.' }] };
+          }
+          const npcList = npcs.map(n => `${n.name} (${n.role})`).join(', ');
+          return { content: [{ type: 'text', text: `NPCs here: ${npcList}\n\nUse talk with npc_name to speak to one.` }] };
+        }
+
+        if (player.location_id === null) {
+          return { content: [{ type: 'text', text: 'NPCs are found inside locations. Use "enter" to go inside.' }] };
+        }
+
+        const npc = getNpcByName(npc_name, player.location_id);
+        if (!npc) {
+          return { content: [{ type: 'text', text: `NPC "${npc_name}" not found at your location.` }] };
+        }
+
+        if (!topic) {
+          return { content: [{ type: 'text', text: `${npc.name}: "${npc.greeting}"` }] };
+        }
+
+        let dialogueOptions: NpcDialogue[] = [];
+        try {
+          dialogueOptions = JSON.parse(npc.dialogue);
+        } catch {
+          return { content: [{ type: 'text', text: `${npc.name}: "${npc.greeting}"` }] };
+        }
+
+        const match = dialogueOptions.find(d => d.topic.toLowerCase() === topic.toLowerCase());
+        if (!match) {
+          const availableTopics = dialogueOptions.map(d => d.topic).join(', ');
+          return { content: [{ type: 'text', text: `${npc.name} doesn't have anything to say about "${topic}".\n\nAvailable topics: ${availableTopics}` }] };
+        }
+
+        return { content: [{ type: 'text', text: `${npc.name}: "${match.text}"` }] };
+      } catch (e: any) {
+        return { content: [{ type: 'text', text: e.message }] };
+      }
+    }
+  );
+
+  // ---------- Emotes ----------
+
+  const PREDEFINED_EMOTES: Record<string, string> = {
+    bow: 'bows respectfully.',
+    wave: 'waves enthusiastically.',
+    dance: 'breaks into an enthusiastic dance!',
+    cheer: 'cheers loudly!',
+    salute: 'salutes sharply.',
+    laugh: 'laughs heartily.',
+    cry: 'bursts into tears.',
+    shrug: 'shrugs nonchalantly.',
+    flex: 'flexes their muscles impressively.',
+    meditate: 'sits cross-legged and meditates peacefully.',
+  };
+
+  server.tool(
+    'emote',
+    'Perform an emote action visible to everyone at your location.',
+    {
+      token: z.string().uuid().describe('Your auth token'),
+      action: z.string().min(1).max(100).describe('Emote action (bow, wave, dance, etc. or custom text)'),
+    },
+    async ({ token, action }) => {
+      try {
+        const player = authenticate(token);
+        const cd = enforceCooldown(player.id, 'emote', 5000);
+        if (cd !== null) return { content: [{ type: 'text', text: `Please wait ${cd}s before emoting again.` }] };
+
+        const actionLower = action.toLowerCase().trim();
+        const emoteText = PREDEFINED_EMOTES[actionLower] || action;
+
+        const message = `${player.name} ${emoteText}`;
+        createMessage(player.id, null, player.chunk_x, player.chunk_y, message);
+
+        return { content: [{ type: 'text', text: message }] };
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }] };
       }

@@ -6,6 +6,7 @@ import { getPlayerById, updatePlayerGold } from '../models/player.js';
 import { getLocationById } from '../models/location.js';
 import { getActiveSoulBinding, createSoulBinding } from '../models/soul-binding.js';
 import { SOUL_BIND_COST_PER_LEVEL, SOUL_BIND_DURATION_HOURS } from '../types/index.js';
+import { checkAndUnlock } from '../models/achievement.js';
 
 export function registerSoulTools(server: McpServer): void {
   server.tool(
@@ -48,6 +49,9 @@ export function registerSoulTools(server: McpServer): void {
         // Create the binding
         const binding = createSoulBinding(fresh.id, location.id, player.chunk_x, player.chunk_y);
         updatePlayerGold(fresh.id, fresh.gold - cost);
+
+        // Check soul_bound achievement
+        checkAndUnlock(fresh.id, 'soul_bound');
 
         const expiresAt = new Date(binding.expires_at + 'Z');
         const expiryText = expiresAt.toISOString().replace('T', ' ').split('.')[0];

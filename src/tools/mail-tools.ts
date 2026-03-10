@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authenticate } from '../server/auth.js';
 import { getPlayerByName, updatePlayerGold } from '../models/player.js';
 import { enforceCooldown } from '../server/cooldown.js';
-import { validateContent } from '../utils/content-filter.js';
+import { validateContent, sanitizeHtml } from '../utils/content-filter.js';
 import {
   sendMail,
   getInbox,
@@ -54,8 +54,10 @@ export function registerMailTools(server: McpServer): void {
           return { content: [{ type: 'text' as const, text: `Please wait ${cd}s before sending another mail.` }] };
         }
 
-        validateContent(subject, 'subject');
-        validateContent(body, 'body');
+        const sanitizedSubject = sanitizeHtml(subject);
+        const sanitizedBody = sanitizeHtml(body);
+        validateContent(sanitizedSubject, 'subject');
+        validateContent(sanitizedBody, 'body');
 
         const target = getPlayerByName(to);
         if (!target) {
@@ -84,7 +86,7 @@ export function registerMailTools(server: McpServer): void {
         // Delivery fee → Imperial Mail Co. revenue
         routeMailRevenue(MAIL_DELIVERY_FEE);
 
-        const mail = sendMail(player.id, target.id, subject, body, gold_attached);
+        const mail = sendMail(player.id, target.id, sanitizedSubject, sanitizedBody, gold_attached);
 
         const goldNote = gold_attached > 0 ? ` with ${gold_attached}g attached` : '';
         return {

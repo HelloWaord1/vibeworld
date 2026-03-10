@@ -26,6 +26,7 @@ import { registerCraftTools } from '../tools/craft-tools.js';
 import { registerStockTools } from '../tools/stock-tools.js';
 import { registerQuestTools } from '../tools/quest-tools.js';
 import { registerSoulTools } from '../tools/soul-tools.js';
+import { registerDuelTools } from '../tools/duel-tools.js';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -60,6 +61,7 @@ export function createMcpServer(): McpServer {
   registerStockTools(server);
   registerQuestTools(server);
   registerSoulTools(server);
+  registerDuelTools(server);
 
   return server;
 }

@@ -5,23 +5,26 @@ import { DAILY_QUEST_COUNT } from '../types/index.js';
 export function getPlayerQuests(playerId: number, date: string): DailyQuest[] {
   const db = getDb();
   return db.prepare(
-    'SELECT * FROM daily_quests WHERE player_id = ? AND assigned_date = ?'
+    'SELECT * FROM daily_quests WHERE player_id = ? AND assigned_date = ? AND is_tutorial = 0'
   ).all(playerId, date) as DailyQuest[];
 }
 
-export function createQuest(playerId: number, questType: QuestType, description: string, targetCount: number, rewardXp: number, rewardGold: number, date: string): DailyQuest {
+export function createQuest(playerId: number, questType: QuestType, description: string, targetCount: number, rewardXp: number, rewardGold: number, date: string, isTutorial: boolean = false): DailyQuest {
   const db = getDb();
   const result = db.prepare(
-    `INSERT INTO daily_quests (player_id, quest_type, description, target_count, reward_xp, reward_gold, assigned_date) VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(playerId, questType, description, targetCount, rewardXp, rewardGold, date);
+    `INSERT INTO daily_quests (player_id, quest_type, description, target_count, reward_xp, reward_gold, assigned_date, is_tutorial) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(playerId, questType, description, targetCount, rewardXp, rewardGold, date, isTutorial ? 1 : 0);
   return db.prepare('SELECT * FROM daily_quests WHERE id = ?').get(result.lastInsertRowid) as DailyQuest;
 }
 
 export function incrementQuestProgress(playerId: number, questType: QuestType, amount: number = 1): void {
   const db = getDb();
   const today = new Date().toISOString().split('T')[0];
+  // Update both daily quests (assigned today) and tutorial quests (any date, is_tutorial=1)
   db.prepare(
-    `UPDATE daily_quests SET current_count = min(current_count + ?, target_count) WHERE player_id = ? AND quest_type = ? AND assigned_date = ? AND completed_at IS NULL`
+    `UPDATE daily_quests SET current_count = min(current_count + ?, target_count)
+     WHERE player_id = ? AND quest_type = ? AND completed_at IS NULL
+     AND (assigned_date = ? OR is_tutorial = 1)`
   ).run(amount, playerId, questType, today);
 }
 
@@ -40,7 +43,7 @@ export function getQuestStreak(playerId: number): QuestStreak | null {
 export function updateStreak(playerId: number, date: string): QuestStreak {
   const db = getDb();
   const existing = getQuestStreak(playerId);
-  
+
   if (!existing) {
     db.prepare(
       'INSERT INTO quest_streaks (player_id, current_streak, last_completed_date, total_completed) VALUES (?, 1, ?, 1)'
@@ -50,7 +53,7 @@ export function updateStreak(playerId: number, date: string): QuestStreak {
     const lastDate = new Date(existing.last_completed_date);
     const thisDate = new Date(date);
     const diffDays = Math.floor((thisDate.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
-    
+
     if (diffDays === 1) {
       // Consecutive day
       db.prepare(
@@ -64,6 +67,21 @@ export function updateStreak(playerId: number, date: string): QuestStreak {
     }
     // diffDays === 0: same day, don't update streak
   }
-  
+
   return getQuestStreak(playerId)!;
+}
+
+export function getTutorialQuests(playerId: number): DailyQuest[] {
+  const db = getDb();
+  return db.prepare(
+    'SELECT * FROM daily_quests WHERE player_id = ? AND is_tutorial = 1 ORDER BY id ASC'
+  ).all(playerId) as DailyQuest[];
+}
+
+export function hasTutorialQuests(playerId: number): boolean {
+  const db = getDb();
+  const result = db.prepare(
+    'SELECT COUNT(*) as count FROM daily_quests WHERE player_id = ? AND is_tutorial = 1'
+  ).get(playerId) as { count: number };
+  return result.count > 0;
 }

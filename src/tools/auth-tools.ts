@@ -5,6 +5,7 @@ import { logEvent } from '../models/event-log.js';
 import { isWorldFull, getRandomOpenChunk } from '../models/nation.js';
 import { getChunk } from '../models/chunk.js';
 import { getPlayerById } from '../models/player.js';
+import { generateTutorialQuests } from '../game/quests.js';
 
 export function registerAuthTools(server: McpServer): void {
   server.tool(
@@ -37,11 +38,14 @@ export function registerAuthTools(server: McpServer): void {
           }
         }
 
+        // Generate tutorial quests for new player
+        generateTutorialQuests(player.id);
+
         logEvent('register', player.id, null, spawnX, spawnY, null, { name });
         return {
           content: [{
             type: 'text',
-            text: `Welcome to VibeWorld, ${player.name}!\n\nYour token: ${player.token}\n\n${spawnInfo} with ${player.gold} gold.\nUse this token in all subsequent commands.\n\nTip: Use \`look\` to see your surroundings.`
+            text: `Welcome to VibeWorld, ${player.name}!\n\nYour token: ${player.token}\n\n${spawnInfo} with ${player.gold} gold.\nUse this token in all subsequent commands.\n\nTip: Use \`look\` to see your surroundings. Check your tutorial quests with \`daily_quests\` to get started!`
           }]
         };
       } catch (e: any) {

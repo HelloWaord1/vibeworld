@@ -10,6 +10,7 @@ import { getDb } from '../db/connection.js';
 import { MAX_INVENTORY_SIZE } from '../types/index.js';
 import { addLocationRevenue, addChunkRevenue } from '../models/nation.js';
 import { enforceCooldown, COOLDOWNS } from '../server/cooldown.js';
+import { incrementQuestProgress } from '../models/quest.js';
 
 /** Sentinel error to signal a stale listing detected inside a transaction.
  *  Thrown so the transaction rolls back cleanly; the caller then deletes
@@ -29,7 +30,7 @@ export function registerPlayerShopTools(server: McpServer): void {
     {
       token: z.string().uuid().describe('Your auth token'),
       item_id: z.number().int().describe('ID of the item to list'),
-      price: z.number().int().positive().describe('Price in gold'),
+      price: z.number().int().positive().max(1_000_000).describe('Price in gold (max 1M)'),
     },
     async ({ token, item_id, price }) => {
       try {
@@ -169,6 +170,9 @@ export function registerPlayerShopTools(server: McpServer): void {
 
           // Seller receives net amount (relative update)
           db.prepare('UPDATE players SET gold = min(gold + ?, 10000000) WHERE id = ?').run(taxResult.netAmount, listing.seller_id);
+
+          // Update earn_gold quest progress for seller
+          incrementQuestProgress(listing.seller_id, 'earn_gold', taxResult.netAmount);
 
           // Transfer item
           transferToPlayer(listing.item_id, player.id);

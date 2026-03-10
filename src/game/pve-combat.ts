@@ -11,6 +11,9 @@ import { getDb } from '../db/connection.js';
 import { consumeBuff } from './abilities.js';
 import { getActivePartyMembersInChunk } from '../models/party.js';
 import { PARTY_XP_BONUS, PARTY_XP_BONUS_LARGE } from '../types/index.js';
+import { getAttackNarrative, getMissNarrative, getDodgeNarrative } from './combat-narrative.js';
+import { incrementQuestProgress } from '../models/quest.js';
+import { checkAndUnlock } from '../models/achievement.js';
 
 function getWeaponBonus(playerId: number): number {
   const weapon = getEquippedWeapon(playerId);
@@ -40,6 +43,10 @@ export function resolvePveRound(
   const stealthBuff = consumeBuff(player.id, 'stealth');
   const inspireBuff = consumeBuff(player.id, 'inspire');
   const luckyStrikeBuff = consumeBuff(player.id, 'lucky_strike');
+  const powerStrikeBuff = consumeBuff(player.id, 'power_strike');
+  const titansGripBuff = consumeBuff(player.id, 'titans_grip');
+  const assassinateBuff = consumeBuff(player.id, 'assassinate');
+  const intimidateBuff = consumeBuff(player.id, 'intimidate');
 
   const stealthBonus = stealthBuff ? stealthBuff.value : 0;
   const inspireBonus = inspireBuff ? inspireBuff.value : 0;
@@ -48,6 +55,10 @@ export function resolvePveRound(
   if (stealthBuff) parts.push('[STEALTH] You strike from the shadows! (+5 to hit)');
   if (inspireBuff) parts.push('[INSPIRE] You feel inspired! (+2 to hit)');
   if (luckyStrikeBuff) parts.push('[LUCKY STRIKE] Fortune guides your blade!');
+  if (powerStrikeBuff) parts.push('[POWER STRIKE] You strike with precision, ignoring defenses!');
+  if (titansGripBuff) parts.push('[TITAN\'S GRIP] Your attack is empowered! (+50% damage)');
+  if (assassinateBuff) parts.push('[ASSASSINATE] You deliver a LETHAL STRIKE!');
+  if (intimidateBuff) parts.push('[INTIMIDATE] The monster cowers in fear!');
 
   // Player attacks monster
   // Dodge check for monster (DEX-based)
@@ -60,30 +71,46 @@ export function resolvePveRound(
   let playerHit = false;
 
   if (monsterDodgeRoll <= monsterDodgeChance) {
-    parts.push(`${monsterName} dodges your attack! (DEX ${monster.dexterity}, ${monsterDodgeChance}% chance)`);
+    const dodgeNarrative = getDodgeNarrative(monsterName, 'You');
+    parts.push(`${dodgeNarrative}\n(DEX ${monster.dexterity}, ${monsterDodgeChance}% dodge chance)`);
   } else {
     playerRoll = d20() + Math.floor(player.strength / 2) + weaponBonus + stealthBonus + inspireBonus;
-    monsterAc = 10 + Math.floor(monster.constitution / 3) + monster.defense_bonus;
+    // Power Strike ignores monster defense bonus
+    const effectiveDefenseBonus = powerStrikeBuff ? 0 : monster.defense_bonus;
+    monsterAc = 10 + Math.floor(monster.constitution / 3) + effectiveDefenseBonus;
     playerHit = playerRoll >= monsterAc;
 
     if (playerHit) {
-      playerDamage = Math.max(1, d6() + Math.floor(player.strength / 3) + weaponBonus);
-
-      // Lucky Strike: auto-crit on hit
-      if (luckyStrikeBuff) {
+      // Assassinate: fixed damage, auto-crit
+      if (assassinateBuff) {
+        playerDamage = assassinateBuff.value;
         playerCrit = true;
-        playerDamage *= 2;
       } else {
-        const critRoll = d20();
-        if (critRoll <= Math.min(MAX_CRIT_CHANCE, Math.floor(player.luck / 2))) {
-          playerCrit = true;
+        playerDamage = Math.max(1, d6() + Math.floor(player.strength / 3) + weaponBonus);
+
+        // Lucky Strike: 50% crit chance
+        if (luckyStrikeBuff) {
+          if (Math.random() < luckyStrikeBuff.value) {
+            playerCrit = true;
+            playerDamage *= 2;
+          }
+        } else {
+          const critRoll = d20();
+          if (critRoll <= Math.min(MAX_CRIT_CHANCE, Math.floor(player.luck / 2))) {
+            playerCrit = true;
+            playerDamage *= 2;
+          }
+        }
+
+        // Rage: double damage (stacks with crit)
+        if (rageBuff) {
           playerDamage *= 2;
         }
-      }
 
-      // Rage: double damage (stacks with crit)
-      if (rageBuff) {
-        playerDamage *= 2;
+        // Titan's Grip: +50% damage
+        if (titansGripBuff) {
+          playerDamage = Math.floor(playerDamage * 1.5);
+        }
       }
 
       // Ensure minimum 1 damage on hit to prevent infinite combat loops
@@ -91,9 +118,14 @@ export function resolvePveRound(
       monsterHp -= playerDamage;
     }
 
-    parts.push(
-      `You roll ${playerRoll} vs AC ${monsterAc}: ${playerHit ? (playerCrit ? 'CRITICAL HIT' : 'Hit') : 'Miss'}${playerHit ? ` for ${playerDamage} damage` : ''}`
-    );
+    const weapon = getEquippedWeapon(player.id);
+    if (playerHit) {
+      const attackNarrative = getAttackNarrative('You', monsterName, playerDamage, playerCrit, weapon?.name);
+      parts.push(`${attackNarrative}\n(d20: ${playerRoll} vs AC ${monsterAc} = Hit, ${playerDamage} dmg)`);
+    } else {
+      const missNarrative = getMissNarrative('You', monsterName);
+      parts.push(`${missNarrative}\n(d20: ${playerRoll} vs AC ${monsterAc} = Miss)`);
+    }
   }
 
   // --- Monster attacks player (if still alive) ---
@@ -103,10 +135,15 @@ export function resolvePveRound(
   // Consume defensive buffs BEFORE monster attack
   const fortifyBuff = consumeBuff(player.id, 'fortify');
   const rageAcPenalty = consumeBuff(player.id, 'rage_ac_penalty');
+  const paladinsShieldBuff = consumeBuff(player.id, 'paladins_shield');
 
   if (fortifyBuff) {
     playerAc += fortifyBuff.value;
     parts.push(`[FORTIFY] Your defenses hold strong! (+${fortifyBuff.value} AC)`);
+  }
+  if (paladinsShieldBuff) {
+    playerAc += paladinsShieldBuff.value;
+    parts.push(`[PALADIN'S SHIELD] You are protected by holy light! (+${paladinsShieldBuff.value} AC)`);
   }
   if (rageAcPenalty) {
     playerAc -= rageAcPenalty.value;
@@ -116,13 +153,17 @@ export function resolvePveRound(
   let monsterHit = false;
   let monsterDamage = 0;
 
-  if (monsterHp > 0) {
+  // Check for Intimidate - monster skips attack
+  if (monsterHp > 0 && intimidateBuff) {
+    parts.push(`${monsterName} is too frightened to attack!`);
+  } else if (monsterHp > 0) {
     // Dodge check for player (DEX-based)
     const playerDodgeRoll = d100();
     const playerDodgeChance = Math.floor(player.dexterity / 4);
-    
+
     if (playerDodgeRoll <= playerDodgeChance) {
-      parts.push(`You dodge ${monsterName}'s attack! (DEX ${player.dexterity}, ${playerDodgeChance}% chance)`);
+      const dodgeNarrative = getDodgeNarrative('You', monsterName);
+      parts.push(`${dodgeNarrative}\n(DEX ${player.dexterity}, ${playerDodgeChance}% dodge chance)`);
     } else {
       monsterRoll = d20() + Math.floor(monster.strength / 2) + monster.damage_bonus;
       monsterHit = monsterRoll >= playerAc;
@@ -132,14 +173,27 @@ export function resolvePveRound(
         playerHp -= monsterDamage;
       }
 
-      parts.push(
-        `${monsterName} rolls ${monsterRoll} vs AC ${playerAc}: ${monsterHit ? 'Hit' : 'Miss'}${monsterHit ? ` for ${monsterDamage} damage` : ''}`
-      );
+      if (monsterHit) {
+        const attackNarrative = getAttackNarrative(monsterName, 'you', monsterDamage, false);
+        parts.push(`${attackNarrative}\n(d20: ${monsterRoll} vs AC ${playerAc} = Hit, ${monsterDamage} dmg)`);
+      } else {
+        const missNarrative = getMissNarrative(monsterName, 'you');
+        parts.push(`${missNarrative}\n(d20: ${monsterRoll} vs AC ${playerAc} = Miss)`);
+      }
     }
   }
 
-  const finalPlayerHp = Math.max(0, playerHp);
+  let finalPlayerHp = Math.max(0, playerHp);
   const finalMonsterHp = Math.max(0, monsterHp);
+
+  // Check for Undying passive BEFORE updating HP
+  if (finalPlayerHp <= 0) {
+    const undyingBuff = consumeBuff(player.id, 'undying');
+    if (undyingBuff) {
+      finalPlayerHp = 1;
+      parts.push('[UNDYING] You refuse to fall! You survive with 1 HP!');
+    }
+  }
 
   // Update HP in DB
   updatePlayerHp(player.id, finalPlayerHp);
@@ -239,10 +293,17 @@ export function handleMonsterKill(
   if (gold > 0) {
     const fresh = getPlayerById(player.id)!;
     updatePlayerGold(player.id, Math.min(fresh.gold + gold, 10_000_000));
+    // Update earn_gold quest progress
+    incrementQuestProgress(player.id, 'earn_gold', gold);
   }
 
   // Loot rolls — loot goes to killer
   const lootDropped: string[] = [];
+
+  // Check for Fortune's Favor buff (double loot)
+  const fortunesFavorBuff = consumeBuff(player.id, 'fortunes_favor');
+  const lootMultiplier = fortunesFavorBuff ? fortunesFavorBuff.value : 1;
+
   try {
     const lootTable = JSON.parse(template.loot_table) as Array<{
       name: string;
@@ -256,32 +317,35 @@ export function handleMonsterKill(
       drop_chance: number;
     }>;
 
-    for (const entry of lootTable) {
-      if (Math.random() < entry.drop_chance) {
-        // Luck-based rarity upgrade
-        const luckUpgradeChance = player.luck / 5; // 0-10% at luck 0-50
-        let finalRarity = (entry.rarity as any) ?? 'common';
-        if (Math.random() * 100 < luckUpgradeChance) {
-          const rarityOrder = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
-          const currentIdx = rarityOrder.indexOf(finalRarity);
-          if (currentIdx < rarityOrder.length - 1) {
-            finalRarity = rarityOrder[currentIdx + 1];
-            lootDropped.push(`${entry.name} (LUCKY UPGRADE → ${finalRarity}!)`);
+    // Roll loot drops (potentially twice with Fortune's Favor)
+    for (let roll = 0; roll < lootMultiplier; roll++) {
+      for (const entry of lootTable) {
+        if (Math.random() < entry.drop_chance) {
+          // Luck-based rarity upgrade
+          const luckUpgradeChance = player.luck / 5; // 0-10% at luck 0-50
+          let finalRarity = (entry.rarity as any) ?? 'common';
+          if (Math.random() * 100 < luckUpgradeChance) {
+            const rarityOrder = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
+            const currentIdx = rarityOrder.indexOf(finalRarity);
+            if (currentIdx < rarityOrder.length - 1) {
+              finalRarity = rarityOrder[currentIdx + 1];
+              lootDropped.push(`${entry.name} (LUCKY UPGRADE → ${finalRarity}!)`);
+            } else {
+              lootDropped.push(entry.name);
+            }
           } else {
             lootDropped.push(entry.name);
           }
-        } else {
-          lootDropped.push(entry.name);
-        }
 
-        createItem(entry.name, entry.description, entry.item_type as any, {
-          damage_bonus: entry.damage_bonus ?? 0,
-          defense_bonus: entry.defense_bonus ?? 0,
-          heal_amount: entry.heal_amount ?? 0,
-          value: entry.value ?? 0,
-          owner_id: player.id,
-          rarity: finalRarity,
-        });
+          createItem(entry.name, entry.description, entry.item_type as any, {
+            damage_bonus: entry.damage_bonus ?? 0,
+            defense_bonus: entry.defense_bonus ?? 0,
+            heal_amount: entry.heal_amount ?? 0,
+            value: entry.value ?? 0,
+            owner_id: player.id,
+            rarity: finalRarity,
+          });
+        }
       }
     }
   } catch {
@@ -311,6 +375,12 @@ export function handleMonsterKill(
 
   // Increment total_monsters_killed for killer
   db.prepare('UPDATE players SET total_monsters_killed = total_monsters_killed + 1 WHERE id = ?').run(player.id);
+
+  // Check achievements
+  const freshPlayer = getPlayerById(player.id)!;
+  checkAndUnlock(player.id, 'first_blood'); // First kill
+  if (freshPlayer.total_monsters_killed >= 10) checkAndUnlock(player.id, 'slayer10');
+  if (freshPlayer.total_monsters_killed >= 50) checkAndUnlock(player.id, 'slayer50');
 
   // Delete the monster
   killMonster(monster.id);

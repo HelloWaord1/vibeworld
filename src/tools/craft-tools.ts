@@ -9,6 +9,8 @@ import { logEvent } from '../models/event-log.js';
 import { MAX_INVENTORY_SIZE, XP_CRAFT_ITEM } from '../types/index.js';
 import type { RecipeWithIngredients } from '../types/index.js';
 import { getDb } from '../db/connection.js';
+import { incrementQuestProgress } from '../models/quest.js';
+import { checkAndUnlock } from '../models/achievement.js';
 
 function formatRecipe(recipe: RecipeWithIngredients): string {
   const ingredientList = recipe.ingredients
@@ -122,12 +124,18 @@ export function registerCraftTools(server: McpServer): void {
         const db = getDb();
         db.prepare('UPDATE players SET xp = xp + ? WHERE id = ?').run(XP_CRAFT_ITEM, player.id);
 
+        // Update craft quest progress
+        incrementQuestProgress(player.id, 'craft_item', 1);
+
         // Log event
         logEvent('craft', player.id, null, player.chunk_x, player.chunk_y, player.location_id, {
           recipe_name: recipe.name,
           item_id: craftedItem.id,
           item_name: craftedItem.name,
         });
+
+        // Check craftsman achievement
+        checkAndUnlock(player.id, 'craftsman');
 
         const ingredientList = recipe.ingredients
           .map(i => `${i.quantity}x ${i.item_name}`)

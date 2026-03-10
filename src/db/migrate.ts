@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS daily_quests (
   reward_gold INTEGER NOT NULL DEFAULT 0,
   assigned_date TEXT NOT NULL,
   completed_at TEXT,
+  is_tutorial INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (player_id) REFERENCES players(id)
 );
 
@@ -282,6 +283,18 @@ CREATE TABLE IF NOT EXISTS cooldowns (
   expires_at TEXT NOT NULL,
   PRIMARY KEY (player_id, action),
   FOREIGN KEY (player_id) REFERENCES players(id)
+);
+
+CREATE TABLE IF NOT EXISTS npcs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL,
+  location_id INTEGER NOT NULL,
+  chunk_x INTEGER NOT NULL,
+  chunk_y INTEGER NOT NULL,
+  greeting TEXT NOT NULL,
+  dialogue TEXT NOT NULL DEFAULT '[]',
+  FOREIGN KEY (location_id) REFERENCES locations(id)
 );
 `;
 
@@ -601,6 +614,40 @@ CREATE INDEX IF NOT EXISTS idx_player_bounties_status ON player_bounties(status,
 CREATE INDEX IF NOT EXISTS idx_player_bounties_target ON player_bounties(target_id, status);
 `;
 
+// --- Dueling System ---
+const DUEL_SCHEMA = `
+CREATE TABLE IF NOT EXISTS duels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  challenger_id INTEGER NOT NULL,
+  target_id INTEGER NOT NULL,
+  wager INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  winner_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at TEXT,
+  FOREIGN KEY (challenger_id) REFERENCES players(id),
+  FOREIGN KEY (target_id) REFERENCES players(id),
+  FOREIGN KEY (winner_id) REFERENCES players(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_duels_target ON duels(target_id, status);
+CREATE INDEX IF NOT EXISTS idx_duels_challenger ON duels(challenger_id, status);
+`;
+
+// --- Achievements ---
+const ACHIEVEMENTS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS achievements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  player_id INTEGER NOT NULL,
+  achievement_key TEXT NOT NULL,
+  unlocked_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(player_id, achievement_key),
+  FOREIGN KEY (player_id) REFERENCES players(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_achievements_player ON achievements(player_id);
+`;
+
 export function migrate(): void {
   const db = getDb();
   db.exec(SCHEMA);
@@ -613,6 +660,8 @@ export function migrate(): void {
   db.exec(BANKING_SCHEMA);
   db.exec(GOVERNANCE_SCHEMA);
   db.exec(BOUNTY_BOARD_SCHEMA);
+  db.exec(DUEL_SCHEMA);
+  db.exec(ACHIEVEMENTS_SCHEMA);
 
   // Add level_requirement column to items table
   addColumnIfMissing(db, 'items', 'level_requirement', 'INTEGER NOT NULL DEFAULT 0');
@@ -648,6 +697,9 @@ export function migrate(): void {
   addColumnIfMissing(db, 'messages', 'message_type', "TEXT NOT NULL DEFAULT 'public'");
   addColumnIfMissing(db, 'messages', 'alliance_id', 'INTEGER');
 
+  // Add is_tutorial column to daily_quests table
+  addColumnIfMissing(db, 'daily_quests', 'is_tutorial', 'INTEGER NOT NULL DEFAULT 0');
+
   // Seed world bank singleton row
   seedWorldBank(db);
   // Seed AMM liquidity pool singleton row
@@ -657,6 +709,7 @@ export function migrate(): void {
 
   seed(db);
   seedRecipes(db);
+  seedNpcs(db);
 }
 
 function addColumnIfMissing(db: ReturnType<typeof getDb>, table: string, column: string, definition: string): void {
@@ -879,4 +932,65 @@ function seedRecipes(db: ReturnType<typeof getDb>): void {
   insertIngredient.run(warHammer.lastInsertRowid, 'Leather', 1);
 
   console.log('[seed] Crafting recipes created (13 total)');
+}
+
+function seedNpcs(db: ReturnType<typeof getDb>): void {
+  const existing = db.prepare('SELECT 1 FROM npcs LIMIT 1').get();
+  if (existing) return;
+
+  const tavernLocation = db.prepare(
+    `SELECT id FROM locations WHERE name = 'The First Pint Tavern' AND chunk_x = 0 AND chunk_y = 0`
+  ).get() as { id: number } | undefined;
+
+  const shopLocation = db.prepare(
+    `SELECT id FROM locations WHERE name = 'The Curiosity Shop' AND chunk_x = 0 AND chunk_y = 0`
+  ).get() as { id: number } | undefined;
+
+  if (tavernLocation) {
+    const grimjawDialogue = JSON.stringify([
+      { topic: 'rumors', text: 'I hear there are monsters prowling the Windswept Plains to the south. Dangerous business, but good coin for those brave enough.' },
+      { topic: 'quest', text: 'Say, if you could clear out those rats in my cellar, I\'d pay you 50 gold. They\'ve been keeping me up at night!' },
+      { topic: 'drink', text: 'Here, have an ale on the house. *slides you a foaming mug* Nothing beats a cold one after a long day of adventuring.' },
+      { topic: 'town', text: 'The Nexus is the safest place in all the realms. Perfect for newcomers to get their bearings before venturing out.' },
+      { topic: 'advice', text: 'If you\'re heading into danger, make sure you\'re well-equipped. Visit Old Whiskers at the Curiosity Shop - he has what you need.' }
+    ]);
+
+    db.prepare(`
+      INSERT INTO npcs (name, role, location_id, chunk_x, chunk_y, greeting, dialogue)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'Grimjaw',
+      'barkeep',
+      tavernLocation.id,
+      0,
+      0,
+      'Welcome to The First Pint! What\'ll it be, friend? Pull up a stool and rest your weary bones.',
+      grimjawDialogue
+    );
+  }
+
+  if (shopLocation) {
+    const whiskersDialogue = JSON.stringify([
+      { topic: 'items', text: 'I stock only the finest wares from across the realms. Weapons, armor, potions... if you need it, I probably have it.' },
+      { topic: 'rare', text: '*leans in conspiratorially* Between you and me, that Skeleton Key can open almost any lock. Very useful for... explorers.' },
+      { topic: 'lore', text: 'This world is vast and full of mysteries. I\'ve heard tales of hidden dungeons, ancient artifacts, and powerful monsters. Some say there\'s even a dragon sleeping beneath the mountains to the north.' },
+      { topic: 'business', text: 'Trade is the lifeblood of civilization. I buy and sell fairly - 60% of value when you sell to me, full price when you buy. Fair is fair.' },
+      { topic: 'advice', text: 'Don\'t venture too far from The Nexus without proper equipment. The danger level rises quickly, and death is permanent in these lands.' }
+    ]);
+
+    db.prepare(`
+      INSERT INTO npcs (name, role, location_id, chunk_x, chunk_y, greeting, dialogue)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'Old Whiskers',
+      'shopkeeper',
+      shopLocation.id,
+      0,
+      0,
+      'Ah, a customer! Welcome, welcome. Browse my wares, and let me know if anything catches your eye.',
+      whiskersDialogue
+    );
+  }
+
+  console.log('[seed] NPCs created (Grimjaw, Old Whiskers)');
 }

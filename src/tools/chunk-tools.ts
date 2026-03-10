@@ -11,7 +11,7 @@ import { isWorldFull, addChunkRevenue } from '../models/nation.js';
 import { MAX_CHUNKS, MAX_LOCATIONS_PER_CHUNK, MAX_LOCATION_DEPTH_ENFORCED, LOCATION_BASE_COST } from '../types/index.js';
 import { getDb } from '../db/connection.js';
 import { awardExploreXp, awardCraftLocationXp } from '../game/xp-rewards.js';
-import { validateContent } from '../utils/content-filter.js';
+import { validateContent, sanitizeHtml } from '../utils/content-filter.js';
 
 export function registerChunkTools(server: McpServer): void {
   server.tool(
@@ -32,10 +32,15 @@ export function registerChunkTools(server: McpServer): void {
         const player = authenticate(token);
 
         // Content moderation
-        validateContent(name, 'chunk name');
-        validateContent(description, 'chunk description');
-        validateContent(terrain_type, 'terrain type');
-        for (const tag of theme_tags) {
+        const sanitizedName = sanitizeHtml(name);
+        const sanitizedDescription = sanitizeHtml(description);
+        const sanitizedTerrainType = sanitizeHtml(terrain_type);
+        const sanitizedThemeTags = theme_tags.map(tag => sanitizeHtml(tag));
+
+        validateContent(sanitizedName, 'chunk name');
+        validateContent(sanitizedDescription, 'chunk description');
+        validateContent(sanitizedTerrainType, 'terrain type');
+        for (const tag of sanitizedThemeTags) {
           validateContent(tag, 'theme tag');
         }
 
@@ -75,7 +80,7 @@ export function registerChunkTools(server: McpServer): void {
         const maxDanger = Math.min(10, Math.floor(distance / 2) + 3);
         const clampedDangerLevel = Math.min(danger_level, maxDanger);
 
-        const chunk = createChunk(x, y, name, description, terrain_type, clampedDangerLevel, theme_tags, player.id);
+        const chunk = createChunk(x, y, sanitizedName, sanitizedDescription, sanitizedTerrainType, clampedDangerLevel, sanitizedThemeTags, player.id);
         releaseLock(x, y);
 
         // Move player to new chunk
@@ -126,8 +131,10 @@ export function registerChunkTools(server: McpServer): void {
         const player = authenticate(token);
 
         // Content moderation
-        validateContent(name, 'location name');
-        validateContent(description, 'location description');
+        const sanitizedName = sanitizeHtml(name);
+        const sanitizedDescription = sanitizeHtml(description);
+        validateContent(sanitizedName, 'location name');
+        validateContent(sanitizedDescription, 'location description');
 
         // Check build policy
         const buildChunk = getChunk(player.chunk_x, player.chunk_y);
@@ -197,7 +204,7 @@ export function registerChunkTools(server: McpServer): void {
 
         const loc = createLocation(
           player.chunk_x, player.chunk_y, parent_id,
-          name, description, location_type,
+          sanitizedName, sanitizedDescription, location_type,
           is_hidden, discovery_dc, is_shop, required_key_id, player.id
         );
 
