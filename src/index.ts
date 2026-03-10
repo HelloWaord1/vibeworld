@@ -1,11 +1,16 @@
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { createMcpServer } from './server/mcp-server.js';
 import { createHttpServer } from './server/http-server.js';
 import { migrate } from './db/migrate.js';
 import { rateLimit } from './server/rate-limit.js';
 import { logger } from './utils/logger.js';
 import { getDb } from './db/connection.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const PORT = parseInt(process.env.PORT || '3000');
 
@@ -35,6 +40,16 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
 const mcpLimiter = rateLimit(120, 60_000);
 const apiLimiter = rateLimit(30, 60_000);
 app.use('/api', apiLimiter);
+
+// Redirect /docs to /docs/ for clean URLs
+app.get('/docs', (_req: express.Request, res: express.Response) => {
+  res.redirect(301, '/docs/');
+});
+
+// Serve static frontend (after API routes registered in createHttpServer, before MCP)
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  extensions: ['html'],
+}));
 
 // POST /mcp — main MCP handler (stateless: new server per request)
 app.post('/mcp', mcpLimiter, async (req: express.Request, res: express.Response) => {
