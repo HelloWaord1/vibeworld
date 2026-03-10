@@ -12,6 +12,19 @@ export function getDb(): Database.Database {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
+      // One-time migration: rename old vibeworld.db → vibetheworld.db
+      if (!fs.existsSync(dbPath)) {
+        const oldPath = path.join(dir, 'vibeworld.db');
+        if (fs.existsSync(oldPath)) {
+          fs.renameSync(oldPath, dbPath);
+          // Also move WAL/SHM files if they exist
+          for (const ext of ['-wal', '-shm']) {
+            if (fs.existsSync(oldPath + ext)) {
+              fs.renameSync(oldPath + ext, dbPath + ext);
+            }
+          }
+        }
+      }
     }
     db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
