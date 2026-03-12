@@ -15,21 +15,21 @@ export function registerMonsterTools(server: McpServer): void {
       name: z.string().min(2).max(50).describe('Monster name'),
       description: z.string().min(10).max(500).describe('Monster description'),
       monster_type: z.enum(['beast', 'undead', 'demon', 'construct', 'elemental', 'humanoid', 'dragon', 'aberration'])
-        .optional().default('beast').describe('Monster type'),
-      base_hp: z.number().int().min(10).max(200).optional().default(30).describe('Base HP'),
-      base_strength: z.number().int().min(1).max(20).optional().default(5).describe('Base STR'),
-      base_dexterity: z.number().int().min(1).max(20).optional().default(5).describe('Base DEX'),
-      base_constitution: z.number().int().min(1).max(20).optional().default(5).describe('Base CON'),
-      base_damage_bonus: z.number().int().min(0).max(10).optional().default(0).describe('Base damage bonus'),
-      base_defense_bonus: z.number().int().min(0).max(10).optional().default(0).describe('Base defense bonus'),
-      min_danger_level: z.number().int().min(1).max(10).optional().default(1).describe('Minimum danger level to spawn'),
-      max_danger_level: z.number().int().min(1).max(10).optional().default(10).describe('Maximum danger level to spawn'),
-      xp_reward: z.number().int().min(5).max(200).optional().default(25).describe('Base XP reward'),
-      gold_min: z.number().int().min(0).max(500).optional().default(0).describe('Minimum gold drop'),
-      gold_max: z.number().int().min(0).max(1000).optional().default(10).describe('Maximum gold drop'),
-      loot_table: z.string().optional().default('[]').describe('JSON array of loot entries'),
+        .optional().describe('Monster type (default: beast)'),
+      base_hp: z.number().int().min(10).max(500).optional().describe('Base HP (default: 30, max scales with danger)'),
+      base_strength: z.number().int().min(3).max(40).optional().describe('Base STR (default: 5, max scales with danger)'),
+      base_dexterity: z.number().int().min(3).max(40).optional().describe('Base DEX (default: 5, max scales with danger)'),
+      base_constitution: z.number().int().min(3).max(40).optional().describe('Base CON (default: 5, max scales with danger)'),
+      base_damage_bonus: z.number().int().min(0).max(10).optional().describe('Base damage bonus (default: 0)'),
+      base_defense_bonus: z.number().int().min(0).max(10).optional().describe('Base defense bonus (default: 0)'),
+      min_danger_level: z.number().int().min(1).max(10).optional().describe('Minimum danger level to spawn (default: 1)'),
+      max_danger_level: z.number().int().min(1).max(10).optional().describe('Maximum danger level to spawn (default: 10)'),
+      xp_reward: z.number().int().min(5).max(250).optional().describe('Base XP reward (auto-calculated from stats if omitted)'),
+      gold_min: z.number().int().min(0).max(200).optional().describe('Minimum gold drop (default: 0)'),
+      gold_max: z.number().int().min(0).max(200).optional().describe('Maximum gold drop (default: 10)'),
+      loot_table: z.string().optional().describe('JSON array of loot entries (default: [])'),
     },
-    async ({ token, name, description, monster_type, base_hp, base_strength, base_dexterity, base_constitution, base_damage_bonus, base_defense_bonus, min_danger_level, max_danger_level, xp_reward, gold_min, gold_max, loot_table }) => {
+    async ({ token, name, description, monster_type: rawMonsterType, base_hp: rawHp, base_strength: rawStr, base_dexterity: rawDex, base_constitution: rawCon, base_damage_bonus: rawDmg, base_defense_bonus: rawDef, min_danger_level: rawMinDanger, max_danger_level: rawMaxDanger, xp_reward: rawXp, gold_min: rawGoldMin, gold_max: rawGoldMax, loot_table: rawLootTable }) => {
       try {
         const player = authenticate(token);
         const chunk = getChunk(player.chunk_x, player.chunk_y);
@@ -37,12 +37,30 @@ export function registerMonsterTools(server: McpServer): void {
 
         const sanitizedName = sanitizeHtml(name);
         const sanitizedDescription = sanitizeHtml(description);
+        const danger = chunk.danger_level;
+
+        // Apply defaults for omitted fields
+        const monster_type = rawMonsterType ?? 'beast';
+        const min_danger_level = rawMinDanger ?? 1;
+        const max_danger_level = rawMaxDanger ?? 10;
+        const base_damage_bonus = rawDmg ?? 0;
+        const base_defense_bonus = rawDef ?? 0;
+        const loot_table = rawLootTable ?? '[]';
+
+        // Danger-scaled caps for stats
+        const hpCap = Math.max(50, danger * 50);       // danger 1 = 50, danger 10 = 500
+        const statCap = Math.max(6, 3 + danger * 3);   // danger 1 = 6, danger 10 = 33
+        const xpCap = Math.max(25, danger * 25);        // danger 1 = 25, danger 10 = 250
+        const goldCap = Math.max(10, danger * 20);      // danger 1 = 20, danger 10 = 200
+
+        // Apply user values with danger-based clamping (min floors from Zod still apply)
+        const base_hp = Math.min(rawHp ?? 30, hpCap);
+        const base_strength = Math.min(rawStr ?? 5, statCap);
+        const base_dexterity = Math.min(rawDex ?? 5, statCap);
+        const base_constitution = Math.min(rawCon ?? 5, statCap);
 
         if (min_danger_level > max_danger_level) {
           return { content: [{ type: 'text', text: 'min_danger_level cannot be greater than max_danger_level.' }] };
-        }
-        if (gold_min > gold_max) {
-          return { content: [{ type: 'text', text: 'gold_min cannot be greater than gold_max.' }] };
         }
 
         // Validate loot_table JSON
@@ -52,19 +70,21 @@ export function registerMonsterTools(server: McpServer): void {
           return { content: [{ type: 'text', text: 'loot_table must be valid JSON array.' }] };
         }
 
-        // Balance formula: cap rewards based on monster difficulty to prevent
-        // gold printer exploits (e.g. HP=10, STR=1 but gold_drop=100, xp=200).
-        const difficultyScore =
+        // Auto-calculate XP from stats if not provided, otherwise cap at danger-based max
+        const calculatedXp = Math.ceil(
           (base_hp / 10) * 0.3 +
           base_strength * 0.25 +
-          (base_defense_bonus || 0) * 0.25 +
-          (base_dexterity || 0) * 0.2;
-        const maxGoldDrop = Math.ceil(difficultyScore * 3);
-        const maxXpReward = Math.ceil(difficultyScore * 5);
+          base_defense_bonus * 0.25 +
+          base_dexterity * 0.2
+        ) * 5;
+        const xp_reward = Math.max(5, Math.min(rawXp ?? calculatedXp, xpCap));
 
-        const clampedGoldMin = Math.min(gold_min, maxGoldDrop);
-        const clampedGoldMax = Math.min(gold_max, maxGoldDrop);
-        const clampedXpReward = Math.min(xp_reward, maxXpReward);
+        // Clamp gold drops: user values respected within danger-based cap
+        const gold_min = Math.min(rawGoldMin ?? 0, goldCap);
+        const gold_max = Math.min(rawGoldMax ?? 10, goldCap);
+
+        // Ensure gold_min <= gold_max after clamping
+        const finalGoldMin = Math.min(gold_min, gold_max);
 
         const template = createMonsterTemplate({
           name: sanitizedName,
@@ -78,9 +98,9 @@ export function registerMonsterTools(server: McpServer): void {
           base_defense_bonus,
           min_danger_level,
           max_danger_level,
-          xp_reward: clampedXpReward,
-          gold_min: clampedGoldMin,
-          gold_max: clampedGoldMax,
+          xp_reward,
+          gold_min: finalGoldMin,
+          gold_max,
           loot_table,
           chunk_x: player.chunk_x,
           chunk_y: player.chunk_y,
@@ -93,10 +113,15 @@ export function registerMonsterTools(server: McpServer): void {
           monster_name: name,
         });
 
-        const wasClamped =
-          gold_min > maxGoldDrop || gold_max > maxGoldDrop || xp_reward > maxXpReward;
-        const clampNote = wasClamped
-          ? `\n⚠️ Rewards were capped to match difficulty (max gold: ${maxGoldDrop}, max XP: ${maxXpReward}).`
+        const warnings: string[] = [];
+        if (rawHp !== undefined && rawHp > hpCap) warnings.push(`HP capped: ${rawHp} -> ${base_hp} (danger ${danger} max: ${hpCap})`);
+        if (rawStr !== undefined && rawStr > statCap) warnings.push(`STR capped: ${rawStr} -> ${base_strength} (max: ${statCap})`);
+        if (rawDex !== undefined && rawDex > statCap) warnings.push(`DEX capped: ${rawDex} -> ${base_dexterity} (max: ${statCap})`);
+        if (rawCon !== undefined && rawCon > statCap) warnings.push(`CON capped: ${rawCon} -> ${base_constitution} (max: ${statCap})`);
+        if (rawXp !== undefined && rawXp > xpCap) warnings.push(`XP capped: ${rawXp} -> ${xp_reward} (max: ${xpCap})`);
+        if (rawGoldMax !== undefined && rawGoldMax > goldCap) warnings.push(`Gold max capped: ${rawGoldMax} -> ${gold_max} (max: ${goldCap})`);
+        const clampNote = warnings.length > 0
+          ? '\n-- Adjusted for chunk danger level ' + danger + ': ' + warnings.join('; ')
           : '';
 
         return {

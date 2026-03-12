@@ -790,6 +790,16 @@ function seed(db: ReturnType<typeof getDb>): void {
     insert.run('Iron Shield', 'A round iron shield, dented but functional.', 'armor', 0, 2, 0, 20, locId, 'common');
     insert.run('Adventurer\'s Compass', 'A brass compass that always points toward the nearest unexplored chunk.', 'misc', 0, 0, 0, 25, locId, 'uncommon');
     insert.run('Skeleton Key', 'A mysterious key that hums with faint energy. Might open locked doors.', 'key', 0, 0, 0, 40, locId, 'rare');
+
+    // Crafting materials — raw ingredients for the 13 crafting recipes
+    insert.run('Herb', 'A bundle of fragrant green herbs with restorative properties. Used in potions and elixirs.', 'material', 0, 0, 0, 8, locId, 'common');
+    insert.run('Iron Ore', 'A chunk of unrefined iron ore, heavy and rough. Essential for forging weapons and armor.', 'material', 0, 0, 0, 12, locId, 'common');
+    insert.run('Leather', 'A piece of tanned animal hide, supple yet tough. Used in crafting armor and bows.', 'material', 0, 0, 0, 10, locId, 'common');
+    insert.run('Wheat', 'A sheaf of golden wheat grain. A staple ingredient for baking and cooking.', 'material', 0, 0, 0, 5, locId, 'common');
+    insert.run('Water Flask', 'A sealed flask of purified water. Used as a base for brewing potions.', 'material', 0, 0, 0, 5, locId, 'common');
+    insert.run('Coal', 'A lump of black coal that burns hot and long. Vital for smelting at the forge.', 'material', 0, 0, 0, 8, locId, 'common');
+    insert.run('Salt', 'A pouch of coarse salt harvested from mineral deposits. Used in food preservation and alchemy.', 'material', 0, 0, 0, 4, locId, 'common');
+    insert.run('Thread', 'A spool of sturdy thread spun from plant fibers. Used for stitching leather and fabric.', 'material', 0, 0, 0, 6, locId, 'common');
   }
 
   console.log('[seed] The Nexus created with starter locations and items');

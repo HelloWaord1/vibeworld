@@ -12,6 +12,7 @@ import { MAX_CHUNKS, MAX_LOCATIONS_PER_CHUNK, MAX_LOCATION_DEPTH_ENFORCED, LOCAT
 import { getDb } from '../db/connection.js';
 import { awardExploreXp, awardCraftLocationXp } from '../game/xp-rewards.js';
 import { validateContent, sanitizeHtml } from '../utils/content-filter.js';
+import { generateChunkMonsters } from '../game/seed-monsters.js';
 
 export function registerChunkTools(server: McpServer): void {
   server.tool(
@@ -83,6 +84,9 @@ export function registerChunkTools(server: McpServer): void {
         const chunk = createChunk(x, y, sanitizedName, sanitizedDescription, sanitizedTerrainType, clampedDangerLevel, sanitizedThemeTags, player.id);
         releaseLock(x, y);
 
+        // Auto-generate monster templates for the new chunk
+        const seededMonsters = generateChunkMonsters(x, y, sanitizedTerrainType, clampedDangerLevel, player.id);
+
         // Move player to new chunk
         updatePlayerPosition(player.id, x, y, null);
 
@@ -95,7 +99,8 @@ export function registerChunkTools(server: McpServer): void {
           "INSERT INTO event_log (event_type, actor_id, chunk_x, chunk_y, data) VALUES ('chunk_explore', ?, ?, ?, '{}')"
         ).run(player.id, x, y);
 
-        let resultText = `✨ Chunk created: ${chunk.name} (${x},${y})\n${chunk.description}\nTerrain: ${chunk.terrain_type} | Danger: ${'⚠️'.repeat(chunk.danger_level)}\n\nYou have moved to this new chunk.\n+${xpResult.xp} XP (new territory!)`;
+        const monsterNames = seededMonsters.map(m => m.name).join(', ');
+        let resultText = `✨ Chunk created: ${chunk.name} (${x},${y})\n${chunk.description}\nTerrain: ${chunk.terrain_type} | Danger: ${'⚠️'.repeat(chunk.danger_level)}\nMonsters: ${monsterNames}\n\nYou have moved to this new chunk.\n+${xpResult.xp} XP (new territory!)`;
         if (xpResult.leveled_up) {
           resultText += ` LEVEL UP! You are now level ${xpResult.new_level}.`;
         }
